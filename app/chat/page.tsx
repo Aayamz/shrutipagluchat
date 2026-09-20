@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Profile, Conversation } from '@/lib/types';
@@ -118,6 +118,9 @@ function ChatContent() {
     }
   }, [activeConversationId]);
 
+  const [onlinePresences, setOnlinePresences] = useState<Map<string, { active_conversation_id?: string | null }>>(new Map());
+  const presenceChannelRef = useRef<any>(null);
+
   // 2. Global Presence & Realtime Listener
   useEffect(() => {
     if (!currentProfile) return;
@@ -128,17 +131,25 @@ function ChatContent() {
       .on('presence', { event: 'sync' }, () => {
         const state = presenceChannel.presenceState();
         const onlineIds = new Set<string>();
+        const presencesMap = new Map<string, { active_conversation_id?: string | null }>();
+
         Object.values(state).forEach((presences: any) => {
           presences.forEach((p: any) => {
-            if (p.user_id) onlineIds.add(p.user_id);
+            if (p.user_id) {
+              onlineIds.add(p.user_id);
+              presencesMap.set(p.user_id, { active_conversation_id: p.active_conversation_id });
+            }
           });
         });
         setOnlineUserIds(onlineIds);
+        setOnlinePresences(presencesMap);
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
+          presenceChannelRef.current = presenceChannel;
           await presenceChannel.track({
             user_id: currentProfile.id,
+            active_conversation_id: activeConversationId,
             online_at: new Date().toISOString(),
           });
         }
@@ -155,7 +166,6 @@ function ChatContent() {
           setConversations((prev) => {
             const convIndex = prev.findIndex((c) => c.id === newMsg.conversation_id);
             if (convIndex === -1) {
-              // Refresh conversations if it's a new chat
               fetchConversations(currentProfile.id);
               return prev;
             }
@@ -179,10 +189,22 @@ function ChatContent() {
       .subscribe();
 
     return () => {
+      presenceChannelRef.current = null;
       supabase.removeChannel(presenceChannel);
       supabase.removeChannel(globalMsgChannel);
     };
   }, [currentProfile, supabase]);
+
+  // Update presence track when active conversation changes
+  useEffect(() => {
+    if (currentProfile && presenceChannelRef.current) {
+      presenceChannelRef.current.track({
+        user_id: currentProfile.id,
+        active_conversation_id: activeConversationId,
+        online_at: new Date().toISOString(),
+      });
+    }
+  }, [activeConversationId, currentProfile]);
 
   // Handle selecting a user from search -> start or find conversation
   const handleSelectUserFromSearch = async (targetUser: Profile) => {
@@ -308,6 +330,7 @@ function ChatContent() {
               currentProfile={currentProfile}
               onBackMobile={() => setShowMobileChat(false)}
               onlineUserIds={onlineUserIds}
+              onlinePresences={onlinePresences}
             />
           ) : (
             <div className="hidden md:flex flex-col items-center justify-center flex-1 text-center p-8 bg-canvas/60 text-ink-muted">

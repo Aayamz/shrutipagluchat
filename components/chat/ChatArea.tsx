@@ -12,6 +12,7 @@ interface ChatAreaProps {
   currentProfile: Profile;
   onBackMobile: () => void;
   onlineUserIds: Set<string>;
+  onlinePresences?: Map<string, { active_conversation_id?: string | null }>;
 }
 
 export default function ChatArea({
@@ -19,6 +20,7 @@ export default function ChatArea({
   currentProfile,
   onBackMobile,
   onlineUserIds,
+  onlinePresences,
 }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
@@ -277,8 +279,11 @@ export default function ChatArea({
 
       setTimeout(scrollToBottom, 100);
 
-      // Trigger Web Push Notification asynchronously
-      if (other) {
+      // Trigger Web Push Notification ONLY if recipient is NOT actively viewing this chat!
+      const recipientPresence = other ? onlinePresences?.get(other.id) : undefined;
+      const isRecipientViewingThisChat = recipientPresence?.active_conversation_id === conversation.id;
+
+      if (other && !isRecipientViewingThisChat) {
         fetch('/api/push/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

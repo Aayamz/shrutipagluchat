@@ -44,10 +44,9 @@ self.addEventListener('push', (event) => {
         let shouldSuppressNotification = false;
 
         for (let client of windowClients) {
-          // Suppress notification popup if tab is visible, focused, AND currently viewing targetConversationId
+          // Suppress notification popup if tab is visible AND currently viewing targetConversationId
           if (
             client.visibilityState === 'visible' &&
-            client.focused &&
             targetConversationId &&
             client.url.includes(`c=${targetConversationId}`)
           ) {
