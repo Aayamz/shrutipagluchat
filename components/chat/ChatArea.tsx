@@ -49,6 +49,28 @@ export default function ChatArea({
     }
   };
 
+  // Notify Service Worker of active conversation focus for notification suppression
+  useEffect(() => {
+    const notifySW = () => {
+      if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+          type: 'SET_ACTIVE_CHAT',
+          conversationId: conversation.id,
+          focused: document.hasFocus(),
+        });
+      }
+    };
+
+    notifySW();
+    window.addEventListener('focus', notifySW);
+    window.addEventListener('blur', notifySW);
+
+    return () => {
+      window.removeEventListener('focus', notifySW);
+      window.removeEventListener('blur', notifySW);
+    };
+  }, [conversation.id]);
+
   // 1. Load initial messages & setup Realtime Channel
   useEffect(() => {
     let isMounted = true;
@@ -64,22 +86,23 @@ export default function ChatArea({
         if (!error && data) {
           setMessages(data as Message[]);
 
-          // Mark unread messages as read
-          const unreadIds = data
-            .filter((m: Message) => m.sender_id !== currentProfile.id && m.status !== 'read')
-            .map((m: Message) => m.id);
+          // If document is focused, mark unread messages as read
+          if (document.hasFocus()) {
+            const unreadIds = data
+              .filter((m: Message) => m.sender_id !== currentProfile.id && m.status !== 'read')
+              .map((m: Message) => m.id);
 
-          if (unreadIds.length > 0) {
-            await supabase
-              .from('messages')
-              .update({ status: 'read' })
-              .in('id', unreadIds);
+            if (unreadIds.length > 0) {
+              await supabase
+                .from('messages')
+                .update({ status: 'read' })
+                .in('id', unreadIds);
 
-            // Broadcast read event to sender
-            sendBroadcast('mark_read', {
-              reader_id: currentProfile.id,
-              message_ids: unreadIds,
-            });
+              sendBroadcast('mark_read', {
+                reader_id: currentProfile.id,
+                message_ids: unreadIds,
+              });
+            }
           }
         }
         setLoadingMessages(false);
@@ -103,17 +126,20 @@ export default function ChatArea({
               return [...prev, newMsg];
             });
 
-            // If received from other, mark read & broadcast back
+            // If received from other
             if (newMsg.sender_id !== currentProfile.id) {
+              const isChatFocused = document.hasFocus();
+              const targetStatus = isChatFocused ? 'read' : 'delivered';
+
               supabase
                 .from('messages')
-                .update({ status: 'read' })
+                .update({ status: targetStatus })
                 .eq('id', newMsg.id);
 
               channel.send({
                 type: 'broadcast',
-                event: 'mark_read',
-                payload: { reader_id: currentProfile.id, message_ids: [newMsg.id] },
+                event: isChatFocused ? 'mark_read' : 'mark_delivered',
+                payload: { sender_target_id: newMsg.sender_id, message_ids: [newMsg.id] },
               });
             }
 
@@ -138,18 +164,28 @@ export default function ChatArea({
           setIsTyping(Boolean(payload.payload?.is_typing));
         }
       })
+      .on('broadcast', { event: 'mark_delivered' }, (payload) => {
+        const delivIds = payload.payload?.message_ids || [];
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.sender_id === currentProfile.id &&
+            m.status === 'sent' &&
+            (delivIds.length === 0 || delivIds.includes(m.id))
+              ? { ...m, status: 'delivered' }
+              : m
+          )
+        );
+      })
       .on('broadcast', { event: 'mark_read' }, (payload) => {
-        if (payload.payload?.reader_id !== currentProfile.id) {
-          const readIds = payload.payload?.message_ids || [];
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.sender_id === currentProfile.id &&
-              (readIds.length === 0 || readIds.includes(m.id))
-                ? { ...m, status: 'read' }
-                : m
-            )
-          );
-        }
+        const readIds = payload.payload?.message_ids || [];
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.sender_id === currentProfile.id &&
+            (readIds.length === 0 || readIds.includes(m.id))
+              ? { ...m, status: 'read' }
+              : m
+          )
+        );
       })
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {

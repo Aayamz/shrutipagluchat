@@ -31,26 +31,66 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// Store active chat info per client
+const activeChats = new Map();
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SET_ACTIVE_CHAT') {
+    const clientId = event.source.id;
+    activeChats.set(clientId, {
+      conversationId: event.data.conversationId,
+      focused: Boolean(event.data.focused),
+    });
+  }
+});
+
 // Push Event - receive Web Push notifications
 self.addEventListener('push', (event) => {
   if (!event.data) return;
 
   try {
     const data = event.data.json();
-    const title = data.title || 'ShrutiPagluChat';
-    const options = {
-      body: data.body || 'New message received',
-      icon: data.icon || '/icons/icon-192.png',
-      badge: '/icons/icon-192.png',
-      vibrate: [100, 50, 100],
-      data: {
-        url: data.url || '/chat',
-      },
-      tag: 'shrutipagluchat-msg',
-      renotify: true,
-    };
+    const targetConversationId = data.conversationId;
 
-    event.waitUntil(self.registration.showNotification(title, options));
+    event.waitUntil(
+      clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+        let shouldSuppressNotification = false;
+
+        for (let client of windowClients) {
+          const clientChatInfo = activeChats.get(client.id);
+          // Suppress notification if user is actively viewing this exact conversation
+          if (
+            client.visibilityState === 'visible' &&
+            client.focused &&
+            clientChatInfo &&
+            clientChatInfo.conversationId === targetConversationId &&
+            clientChatInfo.focused
+          ) {
+            shouldSuppressNotification = true;
+            break;
+          }
+        }
+
+        if (shouldSuppressNotification) {
+          return; // Do NOT pop notification when active chat is focused!
+        }
+
+        const title = data.title || 'ShrutiPagluChat';
+        const options = {
+          body: data.body || 'New message received',
+          icon: data.icon || '/icons/icon-192.png',
+          badge: '/icons/icon-192.png',
+          vibrate: [100, 50, 100],
+          data: {
+            url: data.url || `/chat?c=${targetConversationId || ''}`,
+          },
+          tag: `shrutipagluchat-${targetConversationId || 'general'}`,
+          renotify: true,
+        };
+
+        return self.registration.showNotification(title, options);
+      })
+    );
   } catch (err) {
     console.error('Error parsing push event data:', err);
   }
