@@ -7,6 +7,13 @@ const ASSETS_TO_CACHE = [
   '/icons/icon-512.png',
 ];
 
+// Track active conversation per client
+const activeChats = new Map();
+
+function getClientId(client) {
+  return client.id || client.url;
+}
+
 // Install Event - cache core shell
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -31,6 +38,22 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// Message Event - receive messages from clients (e.g., SET_ACTIVE_CHAT)
+self.addEventListener('message', (event) => {
+  if (!event.data || !event.data.type) return;
+
+  const { type, conversationId, focused } = event.data;
+
+  if (type === 'SET_ACTIVE_CHAT') {
+    const clientId = event.source?.id || 'unknown';
+    if (focused && conversationId) {
+      activeChats.set(clientId, conversationId);
+    } else {
+      activeChats.delete(clientId);
+    }
+  }
+});
+
 // Push Event - receive Web Push notifications
 self.addEventListener('push', (event) => {
   if (!event.data) return;
@@ -44,11 +67,16 @@ self.addEventListener('push', (event) => {
         let shouldSuppressNotification = false;
 
         for (let client of windowClients) {
-          // Suppress notification popup if tab is visible AND currently viewing targetConversationId
+          // Suppress notification if tab is visible AND currently viewing targetConversationId
+          // Check both URL and tracked activeChats state (more reliable for SPA navigation)
+          const clientId = client.id || client.url;
+          const trackedChat = activeChats.get(clientId);
+          const urlMatches = targetConversationId && client.url.includes(`c=${targetConversationId}`);
+
           if (
             client.visibilityState === 'visible' &&
             targetConversationId &&
-            client.url.includes(`c=${targetConversationId}`)
+            (trackedChat === targetConversationId || urlMatches)
           ) {
             shouldSuppressNotification = true;
             break;

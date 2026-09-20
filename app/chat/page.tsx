@@ -155,7 +155,7 @@ function ChatContent() {
         }
       });
 
-    // Realtime listener for incoming conversations & messages
+    // Realtime listener for incoming conversations & messages (sidebar updates only)
     const globalMsgChannel = supabase
       .channel(`user_global_${currentProfile.id}`)
       .on(
@@ -163,9 +163,12 @@ function ChatContent() {
         { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
           const newMsg = payload.new as any;
+          // Only update sidebar conversation list - do NOT fetch messages here
+          // ChatArea handles message realtime for the active conversation
           setConversations((prev) => {
             const convIndex = prev.findIndex((c) => c.id === newMsg.conversation_id);
             if (convIndex === -1) {
+              // Conversation not in list yet - fetch to get full details
               fetchConversations(currentProfile.id);
               return prev;
             }
@@ -174,6 +177,22 @@ function ChatContent() {
             updated.splice(convIndex, 1);
             return [targetConv, ...updated];
           });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'messages' },
+        (payload) => {
+          const updatedMsg = payload.new as any;
+          // Update last_message in sidebar if it's the latest message
+          setConversations((prev) =>
+            prev.map((c) => {
+              if (c.last_message?.id === updatedMsg.id) {
+                return { ...c, last_message: updatedMsg };
+              }
+              return c;
+            })
+          );
         }
       )
       .on(

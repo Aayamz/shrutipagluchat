@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Profile, Conversation, Message } from '@/lib/types';
 import MessageItem from './MessageItem';
 import ImageUploader from './ImageUploader';
-import { User, Send, ArrowLeft, Loader2, Sparkles } from 'lucide-react';
+import { User, Send, ArrowLeft, Loader2, Sparkles, RefreshCw, AlertCircle } from 'lucide-react';
 
 interface ChatAreaProps {
   conversation: Conversation;
@@ -27,21 +27,24 @@ export default function ChatArea({
   const [loadingMessages, setLoadingMessages] = useState(true);
   const [sending, setSending] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const realTimeChannelRef = useRef<any>(null);
   const supabase = createClient();
   const other = conversation.other_user;
+  const isMountedRef = useRef(true);
 
   const isOnline = other ? onlineUserIds.has(other.id) || other.status === 'online' : false;
 
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  }, []);
 
   // Helper to send broadcast events
-  const sendBroadcast = (event: string, payload: any) => {
+  const sendBroadcast = useCallback((event: string, payload: any) => {
     if (realTimeChannelRef.current) {
       realTimeChannelRef.current.send({
         type: 'broadcast',
@@ -49,7 +52,7 @@ export default function ChatArea({
         payload,
       });
     }
-  };
+  }, []);
 
   // Notify Service Worker of active conversation focus for notification suppression
   useEffect(() => {
@@ -73,48 +76,74 @@ export default function ChatArea({
     };
   }, [conversation.id]);
 
-  // 1. Load initial messages & setup Realtime Channel
-  useEffect(() => {
-    let isMounted = true;
-    const fetchMessages = async () => {
+  // Fetch messages with retry logic
+  const fetchMessages = useCallback(async (isRetry = false) => {
+    if (!isMountedRef.current) return;
+
+    if (!isRetry) {
       setLoadingMessages(true);
-      const { data, error } = await supabase
+    }
+    setError(null);
+
+    try {
+      const { data, error: fetchError } = await supabase
         .from('messages')
         .select('*')
         .eq('conversation_id', conversation.id)
         .order('created_at', { ascending: true });
 
-      if (isMounted) {
-        if (!error && data) {
-          setMessages(data as Message[]);
+      if (!isMountedRef.current) return;
 
-          // If document is focused, mark unread messages as read
-          if (document.hasFocus()) {
-            const unreadIds = data
-              .filter((m: Message) => m.sender_id !== currentProfile.id && m.status !== 'read')
-              .map((m: Message) => m.id);
+      if (fetchError) {
+        throw fetchError;
+      }
 
-            if (unreadIds.length > 0) {
-              await supabase
-                .from('messages')
-                .update({ status: 'read' })
-                .in('id', unreadIds);
+      if (data) {
+        setMessages(data as Message[]);
 
-              sendBroadcast('mark_read', {
-                reader_id: currentProfile.id,
-                message_ids: unreadIds,
-              });
-            }
+        // If document is focused, mark unread messages as read
+        if (document.hasFocus()) {
+          const unreadIds = data
+            .filter((m: Message) => m.sender_id !== currentProfile.id && m.status !== 'read')
+            .map((m: Message) => m.id);
+
+          if (unreadIds.length > 0) {
+            await supabase
+              .from('messages')
+              .update({ status: 'read' })
+              .in('id', unreadIds);
+
+            sendBroadcast('mark_read', {
+              reader_id: currentProfile.id,
+              message_ids: unreadIds,
+            });
           }
         }
+      }
+      setRetryCount(0);
+    } catch (err: any) {
+      console.error('Error fetching messages:', err);
+      if (isMountedRef.current) {
+        setError(err.message || 'Failed to load messages');
+        if (!isRetry && retryCount < 3) {
+          setRetryCount(prev => prev + 1);
+          setTimeout(() => fetchMessages(true), 1000 * retryCount);
+          return;
+        }
+      }
+    } finally {
+      if (isMountedRef.current) {
         setLoadingMessages(false);
         setTimeout(scrollToBottom, 100);
       }
-    };
+    }
+  }, [conversation.id, currentProfile.id, supabase, sendBroadcast, retryCount, scrollToBottom]);
 
+  // Setup Unified Realtime Channel (Postgres Changes + Broadcasts)
+  useEffect(() => {
+    isMountedRef.current = true;
     fetchMessages();
 
-    // Setup Unified Realtime Channel (Postgres Changes + Broadcasts)
     const channel = supabase
       .channel(`chat_thread_${conversation.id}`)
       .on(
@@ -196,11 +225,11 @@ export default function ChatArea({
       });
 
     return () => {
-      isMounted = false;
+      isMountedRef.current = false;
       realTimeChannelRef.current = null;
       supabase.removeChannel(channel);
     };
-  }, [conversation.id, currentProfile.id, supabase]);
+  }, [conversation.id, currentProfile.id, supabase, fetchMessages, scrollToBottom]);
 
   // Handle Typing Indicator Broadcast
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -306,6 +335,10 @@ export default function ChatArea({
     handleSendMessage(undefined, imageUrl);
   };
 
+  const handleRefresh = () => {
+    fetchMessages();
+  };
+
   return (
     <div className="flex-1 flex flex-col h-full bg-canvas/60 relative">
       {/* Active Header */}
@@ -342,6 +375,27 @@ export default function ChatArea({
             </p>
           </div>
         </div>
+
+        {/* Header Actions - Refresh Button */}
+        <div className="flex items-center gap-2">
+          {error && (
+            <button
+              onClick={handleRefresh}
+              className="p-2 text-magenta hover:text-magenta/80 rounded-lg hover:bg-magenta/10 transition-all"
+              title="Retry loading messages"
+            >
+              <AlertCircle className="w-4 h-4" />
+            </button>
+          )}
+          <button
+            onClick={handleRefresh}
+            disabled={loadingMessages}
+            className="p-2 text-ink-muted hover:text-white rounded-lg hover:bg-canvas/50 transition-all disabled:opacity-40"
+            title="Refresh messages"
+          >
+            <RefreshCw className={`w-4 h-4 ${loadingMessages ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
       </div>
 
       {/* Message Stream */}
@@ -350,6 +404,20 @@ export default function ChatArea({
           <div className="flex flex-col items-center justify-center h-full text-ink-muted gap-2">
             <Loader2 className="w-6 h-6 animate-spin text-primary" />
             <span className="text-xs">Loading messages...</span>
+          </div>
+        ) : error ? (
+          <div className="flex flex-col items-center justify-center h-full text-center text-magenta gap-3 my-auto p-4">
+            <AlertCircle className="w-10 h-10" />
+            <div>
+              <p className="text-sm font-semibold text-white">Failed to load messages</p>
+              <p className="text-xs text-ink-muted mt-1 max-w-xs">{error}</p>
+              <button
+                onClick={handleRefresh}
+                className="mt-3 px-4 py-2 bg-primary text-white rounded-lg text-sm hover:bg-primary-hover transition-all"
+              >
+                Try Again
+              </button>
+            </div>
           </div>
         ) : messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center text-ink-muted gap-3 my-auto">
