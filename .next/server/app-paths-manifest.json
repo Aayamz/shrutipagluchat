@@ -1,0 +1,4 @@
+{
+  "/api/push/send/route": "app/api/push/send/route.js",
+  "/chat/page": "app/chat/page.js"
+}

@@ -1,0 +1,26 @@
+{
+  "short_name": "ShrutiPagluChat",
+  "name": "ShrutiPagluChat - Realtime 1:1 Messenger",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "id": "/?source=pwa",
+  "start_url": "/chat",
+  "background_color": "#0a0d3a",
+  "theme_color": "#0a0d3a",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "description": "Fast, private 1:1 realtime messaging app built for desktop and mobile.",
+  "categories": ["social", "messaging"]
+}
