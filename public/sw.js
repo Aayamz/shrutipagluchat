@@ -31,19 +31,6 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Store active chat info per client
-const activeChats = new Map();
-
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SET_ACTIVE_CHAT') {
-    const clientId = event.source.id;
-    activeChats.set(clientId, {
-      conversationId: event.data.conversationId,
-      focused: Boolean(event.data.focused),
-    });
-  }
-});
-
 // Push Event - receive Web Push notifications
 self.addEventListener('push', (event) => {
   if (!event.data) return;
@@ -57,14 +44,12 @@ self.addEventListener('push', (event) => {
         let shouldSuppressNotification = false;
 
         for (let client of windowClients) {
-          const clientChatInfo = activeChats.get(client.id);
-          // Suppress notification if user is actively viewing this exact conversation
+          // Suppress notification popup if tab is visible, focused, AND currently viewing targetConversationId
           if (
             client.visibilityState === 'visible' &&
             client.focused &&
-            clientChatInfo &&
-            clientChatInfo.conversationId === targetConversationId &&
-            clientChatInfo.focused
+            targetConversationId &&
+            client.url.includes(`c=${targetConversationId}`)
           ) {
             shouldSuppressNotification = true;
             break;
@@ -72,7 +57,7 @@ self.addEventListener('push', (event) => {
         }
 
         if (shouldSuppressNotification) {
-          return; // Do NOT pop notification when active chat is focused!
+          return; // Suppress notification when tab is actively focused on this conversation!
         }
 
         const title = data.title || 'ShrutiPagluChat';
@@ -92,7 +77,7 @@ self.addEventListener('push', (event) => {
       })
     );
   } catch (err) {
-    console.error('Error parsing push event data:', err);
+    console.error('Error handling push event:', err);
   }
 });
 

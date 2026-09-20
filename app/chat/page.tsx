@@ -110,6 +110,14 @@ function ChatContent() {
     }
   };
 
+  // Sync browser URL search params with activeConversationId for Service Worker notification suppression
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const url = activeConversationId ? `/chat?c=${activeConversationId}` : '/chat';
+      window.history.replaceState(null, '', url);
+    }
+  }, [activeConversationId]);
+
   // 2. Global Presence & Realtime Listener
   useEffect(() => {
     if (!currentProfile) return;
